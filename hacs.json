@@ -1,0 +1,8 @@
+{
+  "name": "Hungarian Power",
+  "content_in_root": false,
+  "filename": "hungarian_power",
+  "render_readme": true,
+  "homeassistant": "2024.12.0"
+}
+

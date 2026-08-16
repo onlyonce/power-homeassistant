@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hungarian Power",
+        "description": "Collect public MAVIR and OAH Hungarian electricity data.",
+        "data": {
+          "scan_interval_minutes": "Refresh interval in minutes"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Hungarian Power is already configured."
+    }
+  }
+}
+
