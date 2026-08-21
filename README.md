@@ -42,6 +42,30 @@ These are public web interfaces rather than stable, versioned APIs. The
 integration exposes source timestamps and treats parse or rate-limit failures
 as diagnosable availability problems.
 
+## Incomplete extracts
+
+If a source does not provide a metric during an extract cycle, the integration
+keeps the last real value instead of replacing it with `unknown`. The sensor
+remains available, but exposes these attributes so dashboards and automations
+can detect stale data:
+
+- `last_updated`: when the metric was last successfully extracted by the integration
+- `source_timestamp`: timestamp reported by the source for that value
+- `is_stale`: whether the current cycle failed to refresh the value
+- `last_error`: the current extraction error, if any
+
+The retained values and source request status are persisted in Home Assistant
+storage, so they survive a Home Assistant restart or integration reload. The
+integration options expose a MAVIR retry interval from 15 to 180 minutes; the
+default is 60 minutes. Sensors and diagnostics also expose the source's last
+attempt, last success, last HTTP status, last rate-limit event, next retry time,
+and safe rate-limit response headers when the server provides them.
+
+During development MAVIR returned HTTP 429 without `Retry-After` or
+`RateLimit-*` headers. In that case the configured retry interval is used and a
+shared cooldown is applied to all MAVIR charts because the observed limiter is
+associated with the public client IP, not with an individual chart.
+
 ## Design inspiration and attribution
 
 This project is an independent Home Assistant implementation. The following
@@ -66,4 +90,3 @@ uv run ruff check .
 ```
 
 Tests use captured or synthetic responses and do not poll the public services.
-

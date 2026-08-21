@@ -5,13 +5,24 @@
         "title": "Hungarian Power",
         "description": "Collect public MAVIR and OAH Hungarian electricity data.",
         "data": {
-          "scan_interval_minutes": "Refresh interval in minutes"
+          "scan_interval_minutes": "Refresh interval in minutes",
+          "mavir_retry_interval_minutes": "MAVIR retry interval after rate limiting (minutes)"
         }
       }
     },
     "abort": {
       "already_configured": "Hungarian Power is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hungarian Power options",
+        "description": "Choose how long to wait before retrying a rate-limited MAVIR chart.",
+        "data": {
+          "mavir_retry_interval_minutes": "MAVIR retry interval after rate limiting (minutes)"
+        }
+      }
+    }
   }
 }
-

@@ -8,9 +8,13 @@ DOMAIN = "hungarian_power"
 NAME = "Hungarian Power"
 
 CONF_SCAN_INTERVAL_MINUTES = "scan_interval_minutes"
+CONF_MAVIR_RETRY_INTERVAL_MINUTES = "mavir_retry_interval_minutes"
 DEFAULT_SCAN_INTERVAL_MINUTES = 15
 MIN_SCAN_INTERVAL_MINUTES = 10
 MAX_SCAN_INTERVAL_MINUTES = 60
+DEFAULT_MAVIR_RETRY_INTERVAL_MINUTES = 60
+MIN_MAVIR_RETRY_INTERVAL_MINUTES = 15
+MAX_MAVIR_RETRY_INTERVAL_MINUTES = 180
 
 MAVIR_BASE_URL = "https://rtdwweb.mavir.hu/rtdwweb/webuser"
 OAH_URL = "https://tranem.haea.hu/web/v3/OAHPortal.nsf/web?OpenAgent=&article=paksnpp"
@@ -18,6 +22,8 @@ MAVIR_REQUEST_BUDGET = 50
 MAVIR_REQUEST_WINDOW_SECONDS = 3600
 MAVIR_CHART_PERIOD_MINUTES = 15
 MAVIR_HISTORY_HOURS = 24
+MAVIR_REQUEST_SPACING_SECONDS = 3
+MAVIR_STORAGE_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,4 +249,3 @@ OAH_METRICS: tuple[MetricDefinition, ...] = tuple(
 
 ALL_METRICS = MAVIR_METRICS + OAH_METRICS
 METRICS_BY_KEY = {metric.key: metric for metric in ALL_METRICS}
-
