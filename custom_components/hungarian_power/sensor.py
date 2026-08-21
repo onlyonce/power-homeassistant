@@ -17,7 +17,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ALL_METRICS, DOMAIN, MetricDefinition
+from .const import ALL_METRICS, DOMAIN, METRICS_BY_KEY, MetricDefinition
 from .coordinator import HungarianPowerCoordinator
 
 
@@ -90,17 +90,56 @@ class HungarianPowerSensor(CoordinatorEntity[HungarianPowerCoordinator], SensorE
         return metric is not None and metric.value is not None
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
+    def extra_state_attributes(self) -> dict[str, object]:
         """Expose source and freshness information for troubleshooting."""
         if not self.coordinator.data:
             return {}
         metric = self.coordinator.data.metrics.get(self.entity_description.key)
         if not metric:
             return {}
+        definition = METRICS_BY_KEY[self.entity_description.key]
+        source_status_key = (
+            f"mavir_{definition.chart_id}" if definition.chart_id is not None else "oah"
+        )
+        source_status = self.coordinator.data.sources.get(source_status_key)
         source_timestamp: datetime | None = metric.source_timestamp
         return {
             "source": metric.source,
             "source_timestamp": source_timestamp.isoformat() if source_timestamp else None,
+            "last_updated": (
+                metric.last_updated_at.isoformat() if metric.last_updated_at else None
+            ),
+            "is_stale": metric.value is not None and metric.error is not None,
             "last_coordinator_update": self.coordinator.data.updated_at.isoformat(),
             "last_error": metric.error,
+            "source_status_key": source_status_key,
+            "last_attempt_at": (
+                source_status.last_attempt_at.isoformat()
+                if source_status and source_status.last_attempt_at
+                else None
+            ),
+            "last_success_at": (
+                source_status.last_success_at.isoformat()
+                if source_status and source_status.last_success_at
+                else None
+            ),
+            "last_rate_limited_at": (
+                source_status.last_rate_limited_at.isoformat()
+                if source_status and source_status.last_rate_limited_at
+                else None
+            ),
+            "last_http_status": (
+                source_status.last_http_status if source_status else None
+            ),
+            "next_retry_at": (
+                source_status.next_retry_at.isoformat()
+                if source_status and source_status.next_retry_at
+                else None
+            ),
+            "response_headers": (
+                dict(source_status.response_headers) if source_status else {}
+            ),
+            "mavir_retry_interval_minutes": (
+                self.coordinator.data.mavir_retry_interval_minutes
+            ),
         }

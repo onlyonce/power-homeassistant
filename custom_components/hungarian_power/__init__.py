@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .const import (
+    CONF_MAVIR_RETRY_INTERVAL_MINUTES,
     CONF_SCAN_INTERVAL_MINUTES,
+    DEFAULT_MAVIR_RETRY_INTERVAL_MINUTES,
     DEFAULT_SCAN_INTERVAL_MINUTES,
 )
 
@@ -24,11 +26,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .oah_client import OahClient
 
     session = async_get_clientsession(hass)
+    mavir_retry_interval = entry.options.get(
+        CONF_MAVIR_RETRY_INTERVAL_MINUTES,
+        entry.data.get(
+            CONF_MAVIR_RETRY_INTERVAL_MINUTES,
+            DEFAULT_MAVIR_RETRY_INTERVAL_MINUTES,
+        ),
+    )
     coordinator = HungarianPowerCoordinator(
         hass,
         MavirClient(session),
         OahClient(session),
         entry.data.get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES),
+        mavir_retry_interval,
+        entry.entry_id,
     )
     entry.runtime_data = coordinator
     await coordinator.async_config_entry_first_refresh()
