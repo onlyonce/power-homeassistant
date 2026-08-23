@@ -13,4 +13,3 @@ def test_request_budget_rejects_the_next_request() -> None:
         budget.acquire()
 
     assert budget.remaining == 0
-

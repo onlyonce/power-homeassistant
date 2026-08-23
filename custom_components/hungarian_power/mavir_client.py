@@ -102,9 +102,7 @@ class MavirClient:
         timeout_seconds: float = 30,
     ) -> None:
         self._session = session
-        self._budget = budget or RequestBudget(
-            MAVIR_REQUEST_BUDGET, MAVIR_REQUEST_WINDOW_SECONDS
-        )
+        self._budget = budget or RequestBudget(MAVIR_REQUEST_BUDGET, MAVIR_REQUEST_WINDOW_SECONDS)
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
 
     @property

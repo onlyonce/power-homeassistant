@@ -15,14 +15,20 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     ALL_METRICS,
     DOMAIN,
+    MAVIR_CHART_IDS,
     MAVIR_CHART_PERIOD_MINUTES,
     MAVIR_HISTORY_HOURS,
     MAVIR_METRICS,
     MAVIR_REQUEST_SPACING_SECONDS,
+    MAVIR_SOURCE_KEY,
+    MAVIR_SOURCE_KEYS,
     MAVIR_STORAGE_VERSION,
     MAX_MAVIR_RETRY_INTERVAL_MINUTES,
+    MAX_SCAN_INTERVAL_MINUTES,
+    METRICS_BY_KEY,
     MIN_MAVIR_RETRY_INTERVAL_MINUTES,
-    OAH_METRICS,
+    MIN_SCAN_INTERVAL_MINUTES,
+    stale_after_minutes,
 )
 from .mavir_client import MavirClient, MavirClientError, MavirRateLimited
 from .mavir_xlsx import MavirParseError, parse_mavir_xlsx
@@ -31,10 +37,9 @@ from .models import (
     MavirChartData,
     MetricValue,
     SourceStatus,
+    aggregate_source_status,
     retain_metric,
 )
-from .oah_client import OahClient, OahClientError
-from .oah_html import OahParseError, parse_oah_html
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,17 +51,20 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
         self,
         hass: HomeAssistant,
         mavir_client: MavirClient,
-        oah_client: OahClient,
         scan_interval_minutes: int,
         mavir_retry_interval_minutes: int,
         entry_id: str,
     ) -> None:
         self.mavir_client = mavir_client
-        self.oah_client = oah_client
+        self.scan_interval_minutes = min(
+            max(scan_interval_minutes, MIN_SCAN_INTERVAL_MINUTES),
+            MAX_SCAN_INTERVAL_MINUTES,
+        )
         self.mavir_retry_interval_minutes = min(
             max(mavir_retry_interval_minutes, MIN_MAVIR_RETRY_INTERVAL_MINUTES),
             MAX_MAVIR_RETRY_INTERVAL_MINUTES,
         )
+        self.stale_after_minutes = stale_after_minutes(self.scan_interval_minutes)
         self._last_known_metrics: dict[str, MetricValue] = {}
         self._source_statuses: dict[str, SourceStatus] = {}
         self._runtime_state_loaded = False
@@ -69,21 +77,23 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=scan_interval_minutes),
+            update_interval=timedelta(minutes=self.scan_interval_minutes),
         )
 
     async def _async_update_data(self) -> CoordinatorState:
-        """Fetch source data, preserving usable values when one source fails."""
+        """Fetch MAVIR data, preserving usable values when one chart fails."""
         await self._async_load_runtime_state()
-        now = datetime.now(UTC)
+        cycle_started_at = datetime.now(UTC)
         errors: dict[str, str] = {}
-        successful_sources = 0
         charts: dict[int, MavirChartData] = {}
-        from_time_ms = int((now - timedelta(hours=MAVIR_HISTORY_HOURS)).timestamp() * 1000)
-        to_time_ms = int(now.timestamp() * 1000)
+        from_time_ms = int(
+            (cycle_started_at - timedelta(hours=MAVIR_HISTORY_HOURS)).timestamp() * 1000
+        )
+        to_time_ms = int(cycle_started_at.timestamp() * 1000)
 
-        chart_ids = sorted({metric.chart_id for metric in MAVIR_METRICS if metric.chart_id})
-        global_mavir_retry_at = self._mavir_next_retry_at(chart_ids, now)
+        chart_ids = list(MAVIR_CHART_IDS)
+        self._record_attempt(MAVIR_SOURCE_KEY, cycle_started_at)
+        global_mavir_retry_at = self._mavir_next_retry_at(chart_ids, cycle_started_at)
         if global_mavir_retry_at:
             _LOGGER.debug(
                 "All MAVIR requests postponed until %s",
@@ -98,10 +108,13 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
                 )
                 continue
             source_status = self._source_statuses.get(source_key)
-            if source_status and source_status.next_retry_at and source_status.next_retry_at > now:
+            if (
+                source_status
+                and source_status.next_retry_at
+                and source_status.next_retry_at > cycle_started_at
+            ):
                 errors[source_key] = (
-                    f"MAVIR retry postponed until "
-                    f"{source_status.next_retry_at.isoformat()}"
+                    f"MAVIR retry postponed until {source_status.next_retry_at.isoformat()}"
                 )
                 _LOGGER.debug(
                     "MAVIR chart %s request skipped until %s",
@@ -112,7 +125,7 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
             if mavir_requests_made:
                 await asyncio.sleep(MAVIR_REQUEST_SPACING_SECONDS)
             mavir_requests_made += 1
-            self._record_attempt(source_key, now)
+            self._record_attempt(source_key, datetime.now(UTC))
             try:
                 response = await self.mavir_client.async_fetch_chart(
                     chart_id,
@@ -129,10 +142,9 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
                     parse_mavir_xlsx, response.body, chart_id
                 )
                 charts[chart_id] = chart
-                successful_sources += 1
-                self._record_success(source_key, now)
+                self._record_success(source_key, datetime.now(UTC))
             except (MavirClientError, MavirParseError) as err:
-                self._record_failure(source_key, now, err)
+                self._record_failure(source_key, datetime.now(UTC), err)
                 errors[source_key] = str(err)
                 status = self._source_statuses[source_key]
                 _LOGGER.warning(
@@ -153,65 +165,42 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
                     self._apply_global_mavir_cooldown(chart_ids, status.next_retry_at)
                     break
 
+        cycle_finished_at = datetime.now(UTC)
+        self._record_mavir_cycle_result(
+            chart_ids=chart_ids,
+            successful_chart_ids=set(charts),
+            errors=errors,
+            finished_at=cycle_finished_at,
+        )
+
         metrics: dict[str, MetricValue] = {}
         for definition in MAVIR_METRICS:
             chart = charts.get(definition.chart_id or -1)
             match = chart.value_for(definition.matchers) if chart else None
             error = errors.get(f"mavir_{definition.chart_id}")
             if chart is not None and match is None:
-                error = f"MAVIR chart {definition.chart_id} did not provide {definition.name}"
+                error = (
+                    f"MAVIR chart {definition.chart_id} did not provide a numeric value "
+                    f"for {definition.name} in the requested window"
+                )
+            chart_status = self._source_statuses.get(f"mavir_{definition.chart_id}")
+            metric_updated_at = (
+                chart_status.last_success_at
+                if chart is not None and chart_status and chart_status.last_success_at
+                else cycle_finished_at
+            )
             metrics[definition.key] = self._retain_metric(
                 definition.key,
                 value=match[0] if match else None,
                 source_timestamp=match[1] if match else None,
                 source=definition.source,
-                now=now,
+                now=metric_updated_at,
                 error=error,
             )
 
-        oah_source_key = "oah"
-        self._record_attempt(oah_source_key, now)
-        try:
-            oah_response = await self.oah_client.async_fetch()
-            self._record_response(
-                oah_source_key,
-                oah_response.status_code,
-                oah_response.response_headers,
-            )
-            paks = await self.hass.async_add_executor_job(parse_oah_html, oah_response.body)
-            successful_sources += 1
-            self._record_success(oah_source_key, now)
-            for index, definition in enumerate(OAH_METRICS):
-                value = paks.units_mw[index]
-                metrics[definition.key] = self._retain_metric(
-                    definition.key,
-                    value=value,
-                    source_timestamp=paks.timestamp,
-                    source=definition.source,
-                    now=now,
-                    error=(
-                        None
-                        if value is not None
-                        else f"OAH source did not provide {definition.name}"
-                    ),
-                )
-        except (OahClientError, OahParseError) as err:
-            errors["oah"] = str(err)
-            self._record_failure(oah_source_key, now, err)
-            _LOGGER.warning("OAH update failed: %s", err)
-            for definition in OAH_METRICS:
-                metrics[definition.key] = self._retain_metric(
-                    definition.key,
-                    value=None,
-                    source_timestamp=None,
-                    source=definition.source,
-                    now=now,
-                    error=str(err),
-                )
-
         self._schedule_runtime_state_save()
-        if successful_sources == 0 and not self._last_known_metrics:
-            raise UpdateFailed("No Hungarian power data source could be updated")
+        if not charts and not self._last_known_metrics:
+            raise UpdateFailed("No MAVIR chart could be updated")
 
         # Ensure every declared metric has a state even if a future definition is added.
         for definition in ALL_METRICS:
@@ -226,10 +215,12 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
             )
         return CoordinatorState(
             metrics=metrics,
-            updated_at=now,
+            updated_at=cycle_finished_at,
             errors=errors,
             sources=dict(self._source_statuses),
+            scan_interval_minutes=self.scan_interval_minutes,
             mavir_retry_interval_minutes=self.mavir_retry_interval_minutes,
+            stale_after_minutes=self.stale_after_minutes,
         )
 
     def _retain_metric(
@@ -269,16 +260,22 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
             stored_metrics = stored.get("metrics")
             if isinstance(stored_metrics, dict):
                 for key, value in stored_metrics.items():
+                    metric_key = str(key)
+                    if metric_key not in METRICS_BY_KEY:
+                        continue
                     metric = MetricValue.from_storage(value)
                     if metric is not None and metric.value is not None:
-                        self._last_known_metrics[str(key)] = metric
+                        self._last_known_metrics[metric_key] = metric
 
             stored_sources = stored.get("sources")
             if isinstance(stored_sources, dict):
                 for key, value in stored_sources.items():
+                    source_key = str(key)
+                    if source_key not in MAVIR_SOURCE_KEYS:
+                        continue
                     status = SourceStatus.from_storage(value)
                     if status is not None:
-                        self._source_statuses[str(key)] = status
+                        self._source_statuses[source_key] = status
 
         self._runtime_state_loaded = True
 
@@ -286,10 +283,14 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
         """Return the persisted metric and source state."""
         return {
             "metrics": {
-                key: value.to_storage() for key, value in self._last_known_metrics.items()
+                key: value.to_storage()
+                for key, value in self._last_known_metrics.items()
+                if key in METRICS_BY_KEY
             },
             "sources": {
-                key: value.to_storage() for key, value in self._source_statuses.items()
+                key: value.to_storage()
+                for key, value in self._source_statuses.items()
+                if key in MAVIR_SOURCE_KEYS
             },
         }
 
@@ -364,6 +365,29 @@ class HungarianPowerCoordinator(DataUpdateCoordinator[CoordinatorState]):
                 next_retry_at=now + timedelta(seconds=retry_seconds),
             )
         self._source_statuses[source_key] = updated
+
+    def _record_mavir_cycle_result(
+        self,
+        *,
+        chart_ids: list[int],
+        successful_chart_ids: set[int],
+        errors: dict[str, str],
+        finished_at: datetime,
+    ) -> None:
+        """Record when the complete set of MAVIR charts last refreshed."""
+        current = self._source_statuses.get(MAVIR_SOURCE_KEY, SourceStatus())
+        failed_statuses = [
+            self._source_statuses.get(f"mavir_{chart_id}", SourceStatus())
+            for chart_id in chart_ids
+            if chart_id not in successful_chart_ids
+        ]
+        self._source_statuses[MAVIR_SOURCE_KEY] = aggregate_source_status(
+            current,
+            complete=successful_chart_ids == set(chart_ids),
+            finished_at=finished_at,
+            failed_statuses=failed_statuses,
+            error_messages=list(errors.values()),
+        )
 
     def _mavir_next_retry_at(
         self,

@@ -39,4 +39,3 @@ class RequestBudget:
         cutoff = now - self._window_seconds
         while self._requests and self._requests[0] <= cutoff:
             self._requests.popleft()
-

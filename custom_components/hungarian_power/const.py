@@ -17,13 +17,23 @@ MIN_MAVIR_RETRY_INTERVAL_MINUTES = 15
 MAX_MAVIR_RETRY_INTERVAL_MINUTES = 180
 
 MAVIR_BASE_URL = "https://rtdwweb.mavir.hu/rtdwweb/webuser"
-OAH_URL = "https://tranem.haea.hu/web/v3/OAHPortal.nsf/web?OpenAgent=&article=paksnpp"
 MAVIR_REQUEST_BUDGET = 50
 MAVIR_REQUEST_WINDOW_SECONDS = 3600
 MAVIR_CHART_PERIOD_MINUTES = 15
 MAVIR_HISTORY_HOURS = 24
 MAVIR_REQUEST_SPACING_SECONDS = 3
 MAVIR_STORAGE_VERSION = 1
+STALE_AFTER_SCAN_INTERVALS = 2
+MAVIR_SOURCE_KEY = "mavir"
+LEGACY_OAH_METRIC_KEYS = tuple(f"paks_unit_{unit}" for unit in range(1, 5))
+
+
+def stale_after_minutes(scan_interval_minutes: int) -> int:
+    """Return the source-age limit for the configured polling cadence."""
+    return max(
+        scan_interval_minutes * STALE_AFTER_SCAN_INTERVALS,
+        MAVIR_CHART_PERIOD_MINUTES * STALE_AFTER_SCAN_INTERVALS,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +156,7 @@ MAVIR_METRICS: tuple[MetricDefinition, ...] = (
         "Gas generation",
         "MAVIR",
         9404,
-        ("Földgáz", "Gázerőmű"),
+        ("Gáz (fosszilis)", "Földgáz", "Gázerőmű"),
         "MW",
         "power",
         "measurement",
@@ -201,7 +211,7 @@ MAVIR_METRICS: tuple[MetricDefinition, ...] = (
         "Run-of-river hydro generation",
         "MAVIR",
         9404,
-        ("Folyóvízi", "Folyóvíz"),
+        ("Folyóvizes", "Folyóvízi", "Folyóvíz"),
         "MW",
         "power",
         "measurement",
@@ -231,21 +241,11 @@ MAVIR_METRICS: tuple[MetricDefinition, ...] = (
     ),
 )
 
-
-OAH_METRICS: tuple[MetricDefinition, ...] = tuple(
-    MetricDefinition(
-        f"paks_unit_{unit}",
-        f"Paks block {unit}",
-        "OAH",
-        None,
-        (),
-        "MW",
-        "power",
-        "measurement",
-        "mdi:atom",
-    )
-    for unit in range(1, 5)
-)
-
-ALL_METRICS = MAVIR_METRICS + OAH_METRICS
+ALL_METRICS = MAVIR_METRICS
 METRICS_BY_KEY = {metric.key: metric for metric in ALL_METRICS}
+MAVIR_CHART_IDS = tuple(
+    sorted({metric.chart_id for metric in MAVIR_METRICS if metric.chart_id is not None})
+)
+MAVIR_SOURCE_KEYS = frozenset(
+    {MAVIR_SOURCE_KEY, *(f"mavir_{chart_id}" for chart_id in MAVIR_CHART_IDS)}
+)

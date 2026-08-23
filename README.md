@@ -8,7 +8,10 @@ The first release targets:
 - MAVIR generation (`4401`)
 - MAVIR fuel mix (`9404`)
 - MAVIR grid frequency (`4444`)
-- OAH/Paks reactor-block output
+
+The fuel-mix data includes aggregate nuclear generation. Reactor-block HTML is
+deliberately not parsed because the aggregate value is the relevant operational
+signal and the page is not a stable machine-readable interface.
 
 The integration uses one coordinator and a shared request budget. It deliberately
 does not create one HTTP request per sensor. MAVIR's current RTDW export service
@@ -22,7 +25,7 @@ Add this repository as a custom HACS repository with category **Integration**.
 After installation, restart Home Assistant and add **Hungarian Power** from
 Settings → Devices & services.
 
-No MAVIR or OAH credentials are required.
+No MAVIR credentials are required.
 
 ## Data sources
 
@@ -32,13 +35,7 @@ The current MAVIR export endpoint is:
 https://rtdwweb.mavir.hu/rtdwweb/webuser/chart/{chart_id}/export
 ```
 
-The OAH source is the official page for the current Paks operating data:
-
-```text
-https://tranem.haea.hu/web/v3/OAHPortal.nsf/web?OpenAgent=&article=paksnpp
-```
-
-These are public web interfaces rather than stable, versioned APIs. The
+This is a public export interface rather than a stable, versioned API. The
 integration exposes source timestamps and treats parse or rate-limit failures
 as diagnosable availability problems.
 
@@ -51,15 +48,23 @@ can detect stale data:
 
 - `last_updated`: when the metric was last successfully extracted by the integration
 - `source_timestamp`: timestamp reported by the source for that value
-- `is_stale`: whether the current cycle failed to refresh the value
+- `source_age_minutes`: age of the timestamp reported by MAVIR
+- `is_stale`: whether refresh failed, the source timestamp is absent, or the
+  source data is older than two configured polling intervals (with a 30-minute minimum)
+- `stale_after_minutes`: the active source-age threshold
 - `last_error`: the current extraction error, if any
 
 The retained values and source request status are persisted in Home Assistant
 storage, so they survive a Home Assistant restart or integration reload. The
-integration options expose a MAVIR retry interval from 15 to 180 minutes; the
-default is 60 minutes. Sensors and diagnostics also expose the source's last
+integration options expose both the normal polling interval (10–60 minutes)
+and the MAVIR retry cooldown after rate limiting (15–180 minutes). Sensors and
+diagnostics also expose the source's last
 attempt, last success, last HTTP status, last rate-limit event, next retry time,
 and safe rate-limit response headers when the server provides them.
+
+A diagnostic timestamp entity named **MAVIR last successful update** publishes
+the last time every required MAVIR chart completed successfully. Its attributes
+include per-chart success timestamps and the oldest/latest source timestamps.
 
 During development MAVIR returned HTTP 429 without `Retry-After` or
 `RateLimit-*` headers. In that case the configured retry interval is used and a
@@ -78,8 +83,7 @@ Home Assistant patterns:
 - [Kisem/ha-mavir-stats](https://github.com/Kisem/ha-mavir-stats)
 - [hikomat/dmenergy](https://github.com/hikomat/dmenergy)
 
-The project is not affiliated with MAVIR, OAH, Paks NPP, ENTSO-E, or Home
-Assistant.
+The project is not affiliated with MAVIR, Paks NPP, ENTSO-E, or Home Assistant.
 
 ## Development
 
