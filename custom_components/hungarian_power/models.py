@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 
@@ -40,14 +40,6 @@ class MavirChartData:
             if any(matcher in normalized_column for matcher in normalized_matchers):
                 return value, self.column_timestamps.get(column, self.timestamp)
         return None
-
-
-@dataclass(frozen=True, slots=True)
-class PaksData:
-    """Current Paks block output parsed from the OAH page."""
-
-    timestamp: datetime
-    units_mw: tuple[float | None, float | None, float | None, float | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,15 +124,67 @@ class SourceStatus:
                 else None
             ),
             next_retry_at=_datetime_from_storage(data.get("next_retry_at")),
-            last_error=(
-                data["last_error"] if isinstance(data.get("last_error"), str) else None
-            ),
+            last_error=(data["last_error"] if isinstance(data.get("last_error"), str) else None),
             response_headers=(
                 {str(key): str(value) for key, value in headers.items()}
                 if isinstance(headers, dict)
                 else {}
             ),
         )
+
+
+def aggregate_source_status(
+    current: SourceStatus,
+    *,
+    complete: bool,
+    finished_at: datetime,
+    failed_statuses: list[SourceStatus],
+    error_messages: list[str],
+) -> SourceStatus:
+    """Return aggregate status for a source backed by multiple requests."""
+    if complete:
+        return replace(
+            current,
+            last_success_at=finished_at,
+            last_http_status=200,
+            next_retry_at=None,
+            last_error=None,
+            response_headers={},
+        )
+
+    last_http_status = next(
+        (status.last_http_status for status in failed_statuses if status.last_http_status == 429),
+        next(
+            (
+                status.last_http_status
+                for status in failed_statuses
+                if status.last_http_status is not None
+            ),
+            None,
+        ),
+    )
+    retry_times = [
+        status.next_retry_at for status in failed_statuses if status.next_retry_at is not None
+    ]
+    rate_limited_times = [
+        status.last_rate_limited_at
+        for status in failed_statuses
+        if status.last_rate_limited_at is not None
+    ]
+    response_headers = next(
+        (status.response_headers for status in failed_statuses if status.response_headers),
+        {},
+    )
+    return replace(
+        current,
+        last_rate_limited_at=(
+            max(rate_limited_times) if rate_limited_times else current.last_rate_limited_at
+        ),
+        last_http_status=last_http_status,
+        next_retry_at=max(retry_times) if retry_times else None,
+        last_error="; ".join(dict.fromkeys(error_messages)) or "Source update incomplete",
+        response_headers=dict(response_headers),
+    )
 
 
 def retain_metric(
@@ -180,6 +224,27 @@ def retain_metric(
     )
 
 
+def metric_source_age_minutes(metric: MetricValue, now: datetime) -> float | None:
+    """Return the non-negative age of the timestamp reported by the source."""
+    if metric.source_timestamp is None:
+        return None
+    age_seconds = (now.astimezone(UTC) - metric.source_timestamp.astimezone(UTC)).total_seconds()
+    return max(0.0, age_seconds / 60)
+
+
+def metric_is_stale(
+    metric: MetricValue,
+    *,
+    now: datetime,
+    stale_after_minutes: int,
+) -> bool:
+    """Return whether a retained value is failed, undated, or older than allowed."""
+    if metric.value is None:
+        return False
+    source_age = metric_source_age_minutes(metric, now)
+    return metric.error is not None or source_age is None or source_age > stale_after_minutes
+
+
 @dataclass(frozen=True, slots=True)
 class CoordinatorState:
     """Coordinator payload, including partial-source errors."""
@@ -188,4 +253,6 @@ class CoordinatorState:
     updated_at: datetime
     errors: dict[str, str]
     sources: dict[str, SourceStatus]
+    scan_interval_minutes: int
     mavir_retry_interval_minutes: int
+    stale_after_minutes: int

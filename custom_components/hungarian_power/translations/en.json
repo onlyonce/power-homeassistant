@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Hungarian Power",
-        "description": "Collect public MAVIR and OAH Hungarian electricity data.",
+        "description": "Collect public MAVIR Hungarian electricity data.",
         "data": {
           "scan_interval_minutes": "Refresh interval in minutes",
           "mavir_retry_interval_minutes": "MAVIR retry interval after rate limiting (minutes)"
@@ -18,8 +18,9 @@
     "step": {
       "init": {
         "title": "Hungarian Power options",
-        "description": "Choose how long to wait before retrying a rate-limited MAVIR chart.",
+        "description": "Choose the normal polling interval and the cooldown after MAVIR rate limiting.",
         "data": {
+          "scan_interval_minutes": "Normal refresh interval (minutes)",
           "mavir_retry_interval_minutes": "MAVIR retry interval after rate limiting (minutes)"
         }
       }
